@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RDA5807M FM/RDS</title>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <markup>./page_head.html</markup>
+    <h2 class="title" style="background: #2F6F8F"> <span id="devicename"></span> RDA5807M — FM/RDS приёмник</h2>
+
+    <!-- Описание -->
+    <div class="content" style="text-align: center;">
+        <table class="scan">
+            <tr><th>Описание / Description</th></tr>
+            <tr><td style="text-align: left; padding: 8px;">
+                <b>RU:</b> Драйвер FM/RDS-приёмника RDA5807M. Модуль сканирует диапазон,
+                показывает до 12 самых сильных станций и используется как источник времени
+                системы по группе RDS 4A (UTC). RDA5807M не измеряет SNR: в колонке BLER
+                показан уровень ошибок RDS-блоков A/B (0 — без ошибок, 3 — некорректируемо).
+                В быстром скане имена собираются для всех станций, а время — у станции,
+                от которой получена синхронизация.<br>
+                <b>EN:</b> RDA5807M FM/RDS driver. Scans the band, shows up to 12 strongest
+                stations and provides system time from RDS group 4A (UTC). The chip has no
+                SNR register; the BLER column shows RDS block error level A/B. The fast scan
+                collects names for all stations and time from the station that provides sync.<br>
+                <small><i>(AI generated)</i></small>
+            </td></tr>
+        </table>
+    </div>
+
+    <!-- Статус -->
+    <div class="content" style="text-align: center;">
+        <table class="scan">
+            <tr><th colspan="2">Состояние / Status</th></tr>
+            <tr><td class="label">Режим</td><td><span id="rdaMode">--</span></td></tr>
+            <tr><td class="label">Скан</td><td><span id="rdaScan">--</span></td></tr>
+            <tr><td class="label">Найдено станций</td><td><span id="rdaCount">--</span></td></tr>
+            <tr><td class="label">Макс. RSSI за скан</td><td><span id="rdaMaxRssi">--</span></td></tr>
+            <tr><td class="label">Последняя RDS-синхронизация</td><td><span id="rdaLastSync">--</span></td></tr>
+            <tr><td class="label">Источник времени</td><td><span id="rdaTimeStatus">--</span></td></tr>
+            <tr><td class="label">I2C</td><td><span id="rdaI2c">--</span></td></tr>
+            <tr><td colspan="2" style="padding: 6px; color: #B00000; font-weight: bold;">
+                <span id="rdaWarning"></span>
+            </td></tr>
+        </table>
+    </div>
+
+    <!-- Управление -->
+    <div class="content" style="text-align: center;">
+        <table class="scan">
+            <tr><th colspan="2">Управление / Control</th></tr>
+            <tr>
+                <td class="label">Режим модуля</td>
+                <td>
+                    <select id="rdaModeSelect">
+                        <option value="0">auto (сканировать по расписанию)</option>
+                        <option value="1">off (выключен)</option>
+                    </select>
+                    <input type="button" value="Применить" class="button-prog" onclick="saveMode()">
+                </td>
+            </tr>
+            <tr>
+                <td class="label">Ручной скан</td>
+                <td>
+                    <input type="button" value="Сканировать" class="button-prog" onclick="scanAction('start')">
+                    <input type="button" value="Остановить" class="button-prog" onclick="scanAction('stop')">
+                    <span id="rdaCtlStatus" style="margin-left:8px;font-size:12px;"></span>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Станции -->
+    <div class="content" style="text-align: center;">
+        <table class="scan">
+            <thead>
+                <tr>
+                    <th>№</th>
+                    <th>Частота, МГц</th>
+                    <th>RSSI</th>
+                    <th>BLER</th>
+                    <th>Стерео</th>
+                    <th>Время (RDS)</th>
+                    <th>Станция</th>
+                </tr>
+            </thead>
+            <tbody id="rdaStations">
+                <tr><td colspan="7" style="padding: 10px;">Станции не найдены</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="footer">
+        Module version: <span id="rdaversion"> </span> &nbsp;|&nbsp;
+        Build: <span id="rdagentime"> </span> <br>
+    </div>
+
+    <markup>./page_bottom.html</markup>
+    <script src="GetJson.js" defer></script>
+    <script src="GetMarkup.js" defer></script>
+    <script>
+        const phaseNames = {
+            idle: 'ожидание',
+            power: 'включение',
+            band: 'поиск станций',
+            names: 'чтение RDS-имён',
+            time: 'ожидание RDS-времени'
+        };
+
+        function pad2(v) { return (v < 10 ? '0' : '') + v; }
+
+        function formatUtc(epoch) {
+            if (!epoch) { return '—'; }
+            const d = new Date(epoch * 1000);
+            return pad2(d.getUTCDate()) + '.' + pad2(d.getUTCMonth() + 1) + '.' +
+                   d.getUTCFullYear() + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ' UTC';
+        }
+
+        function formatRdsTime(epoch, offsetMin) {
+            if (!epoch) { return '—'; }
+            const d = new Date((epoch + offsetMin * 60) * 1000);
+            const sign = offsetMin < 0 ? '-' : '+';
+            const abs = Math.abs(offsetMin);
+            const off = sign + pad2(Math.floor(abs / 60)) + ':' + pad2(abs % 60);
+            return pad2(d.getUTCDate()) + '.' + pad2(d.getUTCMonth() + 1) + ' ' +
+                   pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ' (' + off + ')';
+        }
+
+        function setText(id, text) {
+            const el = document.getElementById(id);
+            if (el) { el.textContent = text; }
+        }
+
+        function renderStations(stations) {
+            const tbody = document.getElementById('rdaStations');
+            tbody.textContent = '';
+            if (!stations || stations.length === 0) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 7;
+                td.style.padding = '10px';
+                td.textContent = 'Станции не найдены';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+                return;
+            }
+
+            stations.forEach((st, index) => {
+                const tr = document.createElement('tr');
+                const cells = [
+                    String(index + 1),
+                    (st.freq / 1000).toFixed(2),
+                    String(st.rssi),
+                    String(st.bler),
+                    st.stereo ? 'ST' : 'MONO',
+                    formatRdsTime(st.time, st.offsetMin),
+                    st.name && st.name.length ? st.name : '—'
+                ];
+                cells.forEach((value, ci) => {
+                    const td = document.createElement('td');
+                    td.textContent = value;
+                    if (ci === 3 && st.bler >= 2) { td.style.color = '#B00000'; td.style.fontWeight = 'bold'; }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        function renderInfo(data) {
+            setText('rdaMode', data.mode === 1 ? 'off' : 'auto');
+            setText('rdaScan', data.scanning
+                ? (phaseNames[data.phase] || data.phase) + ' — ' + data.progress + '%'
+                : 'не идёт');
+            setText('rdaCount', data.detected + ' (в таблице ' + data.stationCount + '/' + data.stationMax + ')');
+            setText('rdaMaxRssi', String(data.maxRssi));
+            setText('rdaLastSync', formatUtc(data.lastSync) +
+                (data.lastSync ? ' — ' + data.lastSyncAgeS + ' с назад' : ''));
+            setText('rdaTimeStatus', data.timeStatus ? data.timeStatus : 'ok');
+            setText('rdaI2c', data.i2cFault ? 'ошибка' : ('SDA ' + data.sda + ', SCL ' + data.scl));
+            setText('rdaWarning', data.i2cFault ? 'Нет связи с RDA5807M по I2C (адрес 0x11).' : '');
+
+            const modeSelect = document.getElementById('rdaModeSelect');
+            if (modeSelect && document.activeElement !== modeSelect) {
+                modeSelect.value = String(data.mode);
+            }
+
+            renderStations(data.stations);
+        }
+
+        async function updateInfo() {
+            try {
+                const resp = await fetch('/rda/info', { cache: 'no-store' });
+                if (!resp.ok) { return; }
+                renderInfo(await resp.json());
+            } catch (e) {
+                setText('rdaWarning', 'Нет ответа от модуля.');
+            }
+        }
+
+        async function saveMode() {
+            const statusEl = document.getElementById('rdaCtlStatus');
+            const mode = document.getElementById('rdaModeSelect').value;
+            statusEl.textContent = 'Сохранение...';
+            try {
+                const resp = await fetch('/rda/save?mode=' + encodeURIComponent(mode), { method: 'POST' });
+                statusEl.textContent = resp.ok ? 'Сохранено' : 'Ошибка';
+            } catch (e) {
+                statusEl.textContent = 'Ошибка';
+            }
+            setTimeout(() => { statusEl.textContent = ''; }, 3000);
+            updateInfo();
+        }
+
+        async function scanAction(action) {
+            const statusEl = document.getElementById('rdaCtlStatus');
+            statusEl.textContent = action === 'start' ? 'Запуск...' : 'Остановка...';
+            try {
+                const resp = await fetch('/rda/scan?action=' + encodeURIComponent(action), { method: 'POST' });
+                if (resp.status === 409) {
+                    statusEl.textContent = 'Режим off';
+                } else {
+                    statusEl.textContent = resp.ok ? 'OK' : 'Ошибка';
+                }
+            } catch (e) {
+                statusEl.textContent = 'Ошибка';
+            }
+            setTimeout(() => { statusEl.textContent = ''; }, 3000);
+            updateInfo();
+        }
+
+        window.onload = function() {
+            setTimeout(() => {
+                ApplyCVT("/system/version")
+                    .then(() => ApplyCVT("/rda/ver"));
+            }, 500);
+            updateInfo();
+            setInterval(updateInfo, 2000);
+        };
+    </script>
+</body>
+</html>
